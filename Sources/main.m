@@ -25,8 +25,6 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 @property(nonatomic, strong) NSMenuItem *toggleFloatingMenuItem;
 @property(nonatomic, strong) NSPanel *floatingPanel;
 @property(nonatomic, strong) DraggableColorButton *floatingButton;
-@property(nonatomic, strong) NSPanel *menuBadgePanel;
-@property(nonatomic, strong) NSButton *menuBadgeButton;
 @property(nonatomic, strong) id clickMonitor;
 @property(nonatomic, assign) EventHotKeyRef hotKeyRef;
 @property(nonatomic, assign) EventHandlerRef hotKeyHandler;
@@ -74,7 +72,6 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
     [NSUserNotificationCenter defaultUserNotificationCenter].delegate = self;
     self.idleTitle = @"取色";
     [self buildMenuBarItem];
-    [self buildMenuBadgePanel];
     [self buildFloatingPanel];
     [self registerHotKey];
     [self notifyWithTitle:@"ColorDropper 已启动" body:@"鼠标移到目标颜色上，按 ⌃⌥⌘C 复制 #RRGGBB"];
@@ -94,8 +91,13 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 }
 
 - (void)buildMenuBarItem {
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.title = @"取色";
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:68.0];
+    self.statusItem.visible = YES;
+    NSDictionary *attributes = @{
+        NSForegroundColorAttributeName: NSColor.labelColor,
+        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]
+    };
+    self.statusItem.button.attributedTitle = [[NSAttributedString alloc] initWithString:@"取色器" attributes:attributes];
     self.statusItem.button.toolTip = @"ColorDropper 取色器 - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
 
     self.controlMenu = [[NSMenu alloc] init];
@@ -106,66 +108,6 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
     [self.controlMenu addItem:[NSMenuItem separatorItem]];
     [self.controlMenu addItemWithTitle:@"退出 ColorDropper" action:@selector(quit) keyEquivalent:@"q"];
     self.statusItem.menu = self.controlMenu;
-}
-
-- (void)buildMenuBadgePanel {
-    NSRect frame = NSMakeRect(0, 0, 92, 28);
-    self.menuBadgePanel = [[NSPanel alloc] initWithContentRect:frame
-                                                     styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
-                                                       backing:NSBackingStoreBuffered
-                                                         defer:NO];
-    self.menuBadgePanel.opaque = NO;
-    self.menuBadgePanel.backgroundColor = NSColor.clearColor;
-    self.menuBadgePanel.hasShadow = YES;
-    self.menuBadgePanel.level = NSStatusWindowLevel;
-    self.menuBadgePanel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                             NSWindowCollectionBehaviorFullScreenAuxiliary |
-                                             NSWindowCollectionBehaviorStationary;
-    self.menuBadgePanel.ignoresMouseEvents = NO;
-
-    NSView *background = [[NSView alloc] initWithFrame:frame];
-    background.wantsLayer = YES;
-    background.layer.backgroundColor = [NSColor colorWithWhite:0.10 alpha:0.88].CGColor;
-    background.layer.cornerRadius = 14;
-    background.layer.masksToBounds = YES;
-    background.layer.borderWidth = 1.0;
-    background.layer.borderColor = [NSColor colorWithWhite:1.0 alpha:0.22].CGColor;
-
-    self.menuBadgeButton = [[NSButton alloc] initWithFrame:frame];
-    self.menuBadgeButton.bordered = NO;
-    self.menuBadgeButton.target = self;
-    self.menuBadgeButton.action = @selector(showControlMenuFromBadge);
-    self.menuBadgeButton.toolTip = @"ColorDropper 菜单：取色 / 显示隐藏 / 退出";
-    NSDictionary *attributes = @{
-        NSForegroundColorAttributeName: NSColor.whiteColor,
-        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]
-    };
-    self.menuBadgeButton.attributedTitle = [[NSAttributedString alloc] initWithString:@"取色器" attributes:attributes];
-
-    [background addSubview:self.menuBadgeButton];
-    self.menuBadgePanel.contentView = background;
-    [self positionMenuBadgePanel];
-    [self.menuBadgePanel orderFrontRegardless];
-}
-
-- (void)positionMenuBadgePanel {
-    NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
-    if (screen == nil || self.menuBadgePanel == nil) {
-        return;
-    }
-
-    NSRect visible = screen.visibleFrame;
-    NSRect frame = self.menuBadgePanel.frame;
-    CGFloat x = NSMaxX(visible) - frame.size.width - 12;
-    CGFloat y = NSMaxY(visible) - frame.size.height - 8;
-    [self.menuBadgePanel setFrameOrigin:NSMakePoint(x, y)];
-}
-
-- (void)showControlMenuFromBadge {
-    [self updateFloatingMenuItemTitle];
-    [self.controlMenu popUpMenuPositioningItem:nil
-                                    atLocation:NSMakePoint(0, NSHeight(self.menuBadgeButton.bounds) + 4)
-                                        inView:self.menuBadgeButton];
 }
 
 - (void)buildFloatingPanel {
@@ -211,10 +153,6 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(keepFloatingPanelOnScreen)
-                                                 name:NSApplicationDidChangeScreenParametersNotification
-                                               object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(positionMenuBadgePanel)
                                                  name:NSApplicationDidChangeScreenParametersNotification
                                                object:nil];
 }
