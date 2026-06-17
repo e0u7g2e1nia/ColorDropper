@@ -90,9 +90,18 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 }
 
 - (void)buildMenuBarItem {
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.title = @"取色器";
-    self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
+    NSImage *menuIcon = [NSImage imageWithSystemSymbolName:@"eyedropper" accessibilityDescription:@"取色器"];
+    if (menuIcon == nil) {
+        menuIcon = [NSImage imageWithSystemSymbolName:@"eyedropper.halffull" accessibilityDescription:@"取色器"];
+    }
+    if (menuIcon != nil) {
+        menuIcon.template = YES;
+        self.statusItem.button.image = menuIcon;
+    } else {
+        self.statusItem.button.title = @"取";
+    }
+    self.statusItem.button.toolTip = @"ColorDropper 取色器 - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
 
     NSMenu *menu = [[NSMenu alloc] init];
     [menu addItemWithTitle:@"取鼠标下颜色  ⌃⌥⌘C" action:@selector(copyColorUnderMouse) keyEquivalent:@""];
@@ -236,7 +245,7 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
                                                   0,
                                                   &_hotKeyRef);
     if (registerStatus != noErr) {
-        self.statusItem.button.title = @"取色器!";
+        self.statusItem.button.toolTip = @"ColorDropper - 快捷键注册失败";
         [self notifyWithTitle:@"快捷键注册失败"
                          body:@"⌃⌥⌘C 可能被其它 App 占用了；仍可从菜单栏点击“取鼠标下颜色”。"];
         return;
@@ -250,7 +259,7 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
                                                  (__bridge void *)self,
                                                  &_hotKeyHandler);
     if (handlerStatus != noErr) {
-        self.statusItem.button.title = @"取色器!";
+        self.statusItem.button.toolTip = @"ColorDropper - 快捷键监听失败";
         [self notifyWithTitle:@"快捷键监听失败"
                          body:@"仍可从菜单栏点击“取鼠标下颜色”。"];
     }
@@ -310,14 +319,14 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 
     if (@available(macOS 15.2, *)) {
         NSRect captureRect = [self topLeftScreenRectForMousePoint:mouse size:1];
-        self.statusItem.button.title = @"读取中";
+        self.statusItem.button.toolTip = @"ColorDropper - 正在读取颜色";
         [self setFloatingButtonTitle:@"读取中"];
 
         [SCScreenshotManager captureImageInRect:NSRectToCGRect(captureRect)
                               completionHandler:^(CGImageRef _Nullable image, NSError * _Nullable error) {
             if (image == NULL || error != nil) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    self.statusItem.button.title = @"取色器";
+                    self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
                     [self setFloatingButtonTitle:@"取色"];
                     [self.floatingPanel orderFrontRegardless];
                     [self notifyWithTitle:@"取色失败"
@@ -389,7 +398,7 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 
 - (void)copyColor:(NSColor *)color {
     if (color == nil) {
-        self.statusItem.button.title = @"取色器";
+        self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
         [self setFloatingButtonTitle:@"取色"];
         [self notifyWithTitle:@"取色失败"
                          body:@"请在 系统设置 > 隐私与安全性 > 屏幕录制 中允许 ColorDropper"];
@@ -406,10 +415,10 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
     [pasteboard clearContents];
     [pasteboard setString:hex forType:NSPasteboardTypeString];
 
-    self.statusItem.button.title = @"已复制";
+    self.statusItem.button.toolTip = [NSString stringWithFormat:@"ColorDropper - 已复制 %@", hex];
     [self setFloatingButtonTitle:@"已复制"];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        self.statusItem.button.title = @"取色器";
+        self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
         [self setFloatingButtonTitle:@"取色"];
     });
     [self notifyWithTitle:@"已复制颜色" body:hex];
