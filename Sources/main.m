@@ -6,15 +6,62 @@
 static EventHotKeyID const kColorHotKeyID = {'COLR', 1};
 static UInt32 const kColorHotKeyModifiers = cmdKey | optionKey | controlKey;
 static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
+static NSString * const kFloatingOriginXKey = @"FloatingButtonOriginX";
+static NSString * const kFloatingOriginYKey = @"FloatingButtonOriginY";
+static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
+
+@class AppDelegate;
+
+@interface DraggableColorButton : NSButton
+@property(nonatomic, weak) AppDelegate *dragDelegate;
+@property(nonatomic, assign) NSPoint mouseDownScreenPoint;
+@property(nonatomic, assign) NSPoint windowDownOrigin;
+@property(nonatomic, assign) BOOL didDrag;
+@end
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSUserNotificationCenterDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSMenuItem *toggleFloatingMenuItem;
 @property(nonatomic, strong) NSPanel *floatingPanel;
-@property(nonatomic, strong) NSButton *floatingButton;
+@property(nonatomic, strong) DraggableColorButton *floatingButton;
 @property(nonatomic, strong) id clickMonitor;
 @property(nonatomic, assign) EventHotKeyRef hotKeyRef;
 @property(nonatomic, assign) EventHandlerRef hotKeyHandler;
 @property(nonatomic, copy) NSString *idleTitle;
+- (void)floatingButtonDidMove;
+@end
+
+@implementation DraggableColorButton
+
+- (void)mouseDown:(NSEvent *)event {
+    self.didDrag = NO;
+    self.mouseDownScreenPoint = NSEvent.mouseLocation;
+    self.windowDownOrigin = self.window.frame.origin;
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    NSPoint current = NSEvent.mouseLocation;
+    CGFloat dx = current.x - self.mouseDownScreenPoint.x;
+    CGFloat dy = current.y - self.mouseDownScreenPoint.y;
+
+    if (!self.didDrag && hypot(dx, dy) < 4.0) {
+        return;
+    }
+
+    self.didDrag = YES;
+    [self.window setFrameOrigin:NSMakePoint(self.windowDownOrigin.x + dx,
+                                            self.windowDownOrigin.y + dy)];
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    if (self.didDrag) {
+        [self.dragDelegate floatingButtonDidMove];
+        return;
+    }
+
+    [NSApp sendAction:self.action to:self.target from:self];
+}
+
 @end
 
 @implementation AppDelegate
@@ -44,13 +91,16 @@ static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
 
 - (void)buildMenuBarItem {
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.title = self.idleTitle;
-    self.statusItem.button.toolTip = @"ColorDropper - ⌃⌥⌘C 复制鼠标下颜色";
+    self.statusItem.button.title = @"取色器";
+    self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
 
     NSMenu *menu = [[NSMenu alloc] init];
     [menu addItemWithTitle:@"取鼠标下颜色  ⌃⌥⌘C" action:@selector(copyColorUnderMouse) keyEquivalent:@""];
+    self.toggleFloatingMenuItem = [menu addItemWithTitle:@"隐藏悬浮按钮" action:@selector(toggleFloatingPanel) keyEquivalent:@""];
+    [menu addItemWithTitle:@"重置悬浮按钮位置" action:@selector(resetFloatingPanelPosition) keyEquivalent:@""];
+    [menu addItemWithTitle:@"在 Finder 中显示应用" action:@selector(revealAppInFinder) keyEquivalent:@""];
     [menu addItem:[NSMenuItem separatorItem]];
-    [menu addItemWithTitle:@"退出" action:@selector(quit) keyEquivalent:@"q"];
+    [menu addItemWithTitle:@"退出 ColorDropper" action:@selector(quit) keyEquivalent:@"q"];
     self.statusItem.menu = menu;
 }
 
@@ -77,21 +127,26 @@ static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
     background.layer.borderWidth = 1.0;
     background.layer.borderColor = [NSColor colorWithWhite:0.58 alpha:0.55].CGColor;
 
-    self.floatingButton = [[NSButton alloc] initWithFrame:frame];
+    self.floatingButton = [[DraggableColorButton alloc] initWithFrame:frame];
+    self.floatingButton.dragDelegate = self;
     self.floatingButton.bezelStyle = NSBezelStyleTexturedRounded;
     self.floatingButton.bordered = NO;
     self.floatingButton.target = self;
     self.floatingButton.action = @selector(startClickPickMode);
     self.floatingButton.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    self.floatingButton.toolTip = @"点击取色；拖动可移动位置；菜单栏可退出";
     [self setFloatingButtonTitle:@"取色"];
 
     [background addSubview:self.floatingButton];
     self.floatingPanel.contentView = background;
-    [self positionFloatingPanel];
-    [self.floatingPanel orderFrontRegardless];
+    [self restoreOrPositionFloatingPanel];
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:kFloatingButtonHiddenKey]) {
+        [self.floatingPanel orderFrontRegardless];
+    }
+    [self updateFloatingMenuItemTitle];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(positionFloatingPanel)
+                                             selector:@selector(keepFloatingPanelOnScreen)
                                                  name:NSApplicationDidChangeScreenParametersNotification
                                                object:nil];
 }
@@ -106,6 +161,18 @@ static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
     self.floatingButton.attributedAlternateTitle = attributedTitle;
 }
 
+- (void)restoreOrPositionFloatingPanel {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults objectForKey:kFloatingOriginXKey] != nil && [defaults objectForKey:kFloatingOriginYKey] != nil) {
+        NSPoint origin = NSMakePoint([defaults doubleForKey:kFloatingOriginXKey],
+                                    [defaults doubleForKey:kFloatingOriginYKey]);
+        [self.floatingPanel setFrameOrigin:[self constrainedOriginForFloatingPanel:origin]];
+        return;
+    }
+
+    [self positionFloatingPanel];
+}
+
 - (void)positionFloatingPanel {
     NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     if (screen == nil || self.floatingPanel == nil) {
@@ -117,6 +184,48 @@ static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
     CGFloat x = NSMaxX(visible) - frame.size.width - 16;
     CGFloat y = NSMaxY(visible) - frame.size.height - 56;
     [self.floatingPanel setFrameOrigin:NSMakePoint(x, y)];
+    [self saveFloatingPanelOrigin];
+}
+
+- (NSPoint)constrainedOriginForFloatingPanel:(NSPoint)origin {
+    if (self.floatingPanel == nil || NSScreen.screens.count == 0) {
+        return origin;
+    }
+
+    NSRect unionFrame = NSZeroRect;
+    for (NSScreen *screen in NSScreen.screens) {
+        unionFrame = NSEqualRects(unionFrame, NSZeroRect) ? screen.visibleFrame : NSUnionRect(unionFrame, screen.visibleFrame);
+    }
+
+    NSSize size = self.floatingPanel.frame.size;
+    CGFloat x = MIN(MAX(origin.x, NSMinX(unionFrame)), NSMaxX(unionFrame) - size.width);
+    CGFloat y = MIN(MAX(origin.y, NSMinY(unionFrame)), NSMaxY(unionFrame) - size.height);
+    return NSMakePoint(x, y);
+}
+
+- (void)keepFloatingPanelOnScreen {
+    if (self.floatingPanel == nil) {
+        return;
+    }
+
+    [self.floatingPanel setFrameOrigin:[self constrainedOriginForFloatingPanel:self.floatingPanel.frame.origin]];
+    [self saveFloatingPanelOrigin];
+}
+
+- (void)saveFloatingPanelOrigin {
+    if (self.floatingPanel == nil) {
+        return;
+    }
+
+    NSPoint origin = self.floatingPanel.frame.origin;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setDouble:origin.x forKey:kFloatingOriginXKey];
+    [defaults setDouble:origin.y forKey:kFloatingOriginYKey];
+}
+
+- (void)floatingButtonDidMove {
+    [self keepFloatingPanelOnScreen];
+    [self notifyWithTitle:@"已移动取色按钮" body:@"位置已保存，下次打开仍会在这里"];
 }
 
 - (void)registerHotKey {
@@ -127,7 +236,7 @@ static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
                                                   0,
                                                   &_hotKeyRef);
     if (registerStatus != noErr) {
-        self.statusItem.button.title = @"取色!";
+        self.statusItem.button.title = @"取色器!";
         [self notifyWithTitle:@"快捷键注册失败"
                          body:@"⌃⌥⌘C 可能被其它 App 占用了；仍可从菜单栏点击“取鼠标下颜色”。"];
         return;
@@ -141,7 +250,7 @@ static UInt32 const kColorHotKeyCode = kVK_ANSI_C;
                                                  (__bridge void *)self,
                                                  &_hotKeyHandler);
     if (handlerStatus != noErr) {
-        self.statusItem.button.title = @"取色!";
+        self.statusItem.button.title = @"取色器!";
         [self notifyWithTitle:@"快捷键监听失败"
                          body:@"仍可从菜单栏点击“取鼠标下颜色”。"];
     }
@@ -201,14 +310,14 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 
     if (@available(macOS 15.2, *)) {
         NSRect captureRect = [self topLeftScreenRectForMousePoint:mouse size:1];
-        self.statusItem.button.title = @"…";
+        self.statusItem.button.title = @"读取中";
         [self setFloatingButtonTitle:@"读取中"];
 
         [SCScreenshotManager captureImageInRect:NSRectToCGRect(captureRect)
                               completionHandler:^(CGImageRef _Nullable image, NSError * _Nullable error) {
             if (image == NULL || error != nil) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    self.statusItem.button.title = self.idleTitle;
+                    self.statusItem.button.title = @"取色器";
                     [self setFloatingButtonTitle:@"取色"];
                     [self.floatingPanel orderFrontRegardless];
                     [self notifyWithTitle:@"取色失败"
@@ -280,7 +389,7 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 
 - (void)copyColor:(NSColor *)color {
     if (color == nil) {
-        self.statusItem.button.title = self.idleTitle;
+        self.statusItem.button.title = @"取色器";
         [self setFloatingButtonTitle:@"取色"];
         [self notifyWithTitle:@"取色失败"
                          body:@"请在 系统设置 > 隐私与安全性 > 屏幕录制 中允许 ColorDropper"];
@@ -297,10 +406,10 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
     [pasteboard clearContents];
     [pasteboard setString:hex forType:NSPasteboardTypeString];
 
-    self.statusItem.button.title = @"✓";
+    self.statusItem.button.title = @"已复制";
     [self setFloatingButtonTitle:@"已复制"];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        self.statusItem.button.title = self.idleTitle;
+        self.statusItem.button.title = @"取色器";
         [self setFloatingButtonTitle:@"取色"];
     });
     [self notifyWithTitle:@"已复制颜色" body:hex];
@@ -320,6 +429,39 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 
 - (void)quit {
     [NSApp terminate:nil];
+}
+
+- (void)toggleFloatingPanel {
+    BOOL isVisible = self.floatingPanel.isVisible;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    if (isVisible) {
+        [self.floatingPanel orderOut:nil];
+        [defaults setBool:YES forKey:kFloatingButtonHiddenKey];
+    } else {
+        [self keepFloatingPanelOnScreen];
+        [self.floatingPanel orderFrontRegardless];
+        [defaults setBool:NO forKey:kFloatingButtonHiddenKey];
+    }
+    [self updateFloatingMenuItemTitle];
+}
+
+- (void)resetFloatingPanelPosition {
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:kFloatingOriginXKey];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:kFloatingOriginYKey];
+    [self positionFloatingPanel];
+    [self.floatingPanel orderFrontRegardless];
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:kFloatingButtonHiddenKey];
+    [self updateFloatingMenuItemTitle];
+}
+
+- (void)revealAppInFinder {
+    NSURL *appURL = [NSURL fileURLWithPath:NSBundle.mainBundle.bundlePath];
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[appURL]];
+}
+
+- (void)updateFloatingMenuItemTitle {
+    self.toggleFloatingMenuItem.title = self.floatingPanel.isVisible ? @"隐藏悬浮按钮" : @"显示悬浮按钮";
 }
 
 @end
