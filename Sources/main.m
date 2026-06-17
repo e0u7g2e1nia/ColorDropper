@@ -90,17 +90,8 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 }
 
 - (void)buildMenuBarItem {
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
-    NSImage *menuIcon = [NSImage imageWithSystemSymbolName:@"eyedropper" accessibilityDescription:@"取色器"];
-    if (menuIcon == nil) {
-        menuIcon = [NSImage imageWithSystemSymbolName:@"eyedropper.halffull" accessibilityDescription:@"取色器"];
-    }
-    if (menuIcon != nil) {
-        menuIcon.template = YES;
-        self.statusItem.button.image = menuIcon;
-    } else {
-        self.statusItem.button.title = @"取";
-    }
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    self.statusItem.button.title = @"取色";
     self.statusItem.button.toolTip = @"ColorDropper 取色器 - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
 
     NSMenu *menu = [[NSMenu alloc] init];
