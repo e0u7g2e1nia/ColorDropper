@@ -91,13 +91,25 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 }
 
 - (void)buildMenuBarItem {
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:68.0];
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:28.0];
+    self.statusItem.autosaveName = @"ColorDropperMenuBarItem";
     self.statusItem.visible = YES;
-    NSDictionary *attributes = @{
-        NSForegroundColorAttributeName: NSColor.labelColor,
-        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]
-    };
-    self.statusItem.button.attributedTitle = [[NSAttributedString alloc] initWithString:@"取色器" attributes:attributes];
+    NSImage *menuIcon = [NSImage imageWithSystemSymbolName:@"eyedropper"
+                                  accessibilityDescription:@"取色器"];
+    NSImageSymbolConfiguration *configuration =
+        [NSImageSymbolConfiguration configurationWithPointSize:15.0
+                                                        weight:NSFontWeightSemibold];
+    menuIcon = [menuIcon imageWithSymbolConfiguration:configuration];
+    if (menuIcon != nil) {
+        menuIcon.template = YES;
+        self.statusItem.button.image = menuIcon;
+        self.statusItem.button.imagePosition = NSImageOnly;
+        self.statusItem.button.title = @"";
+    } else {
+        self.statusItem.button.image = nil;
+        self.statusItem.button.title = @"取";
+        self.statusItem.button.font = [NSFont systemFontOfSize:14.0 weight:NSFontWeightSemibold];
+    }
     self.statusItem.button.toolTip = @"ColorDropper 取色器 - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
 
     self.controlMenu = [[NSMenu alloc] init];
