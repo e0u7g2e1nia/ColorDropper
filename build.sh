@@ -17,8 +17,7 @@ clang "$ROOT/Sources/main.m" \
   -fobjc-arc \
   -framework AppKit \
   -framework Carbon \
-  -framework CoreGraphics \
-  -framework ScreenCaptureKit
+  -framework CoreGraphics
 
 cp "$ROOT/Info.plist" "$CONTENTS/Info.plist"
 if [ -f "$ROOT/Resources/AppIcon.icns" ]; then

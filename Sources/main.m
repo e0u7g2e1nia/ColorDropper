@@ -1,7 +1,5 @@
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
-#import <ScreenCaptureKit/ScreenCaptureKit.h>
-#import <dlfcn.h>
 
 static EventHotKeyID const kColorHotKeyID = {'COLR', 1};
 static UInt32 const kColorHotKeyModifiers = cmdKey | optionKey | controlKey;
@@ -25,9 +23,10 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
 @property(nonatomic, strong) NSMenuItem *toggleFloatingMenuItem;
 @property(nonatomic, strong) NSPanel *floatingPanel;
 @property(nonatomic, strong) DraggableColorButton *floatingButton;
-@property(nonatomic, strong) id clickMonitor;
+@property(nonatomic, strong) NSColorSampler *colorSampler;
 @property(nonatomic, assign) EventHotKeyRef hotKeyRef;
 @property(nonatomic, assign) EventHandlerRef hotKeyHandler;
+@property(nonatomic, assign) BOOL restoreFloatingPanelAfterSampling;
 @property(nonatomic, copy) NSString *idleTitle;
 - (void)floatingButtonDidMove;
 @end
@@ -74,14 +73,10 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
     [self buildMenuBarItem];
     [self buildFloatingPanel];
     [self registerHotKey];
-    [self notifyWithTitle:@"ColorDropper 已启动" body:@"鼠标移到目标颜色上，按 ⌃⌥⌘C 复制 #RRGGBB"];
+    [self notifyWithTitle:@"ColorDropper 已启动" body:@"按 ⌃⌥⌘C 唤起系统吸管，点击目标像素复制 #RRGGBB"];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
-    if (self.clickMonitor != nil) {
-        [NSEvent removeMonitor:self.clickMonitor];
-        self.clickMonitor = nil;
-    }
     if (self.hotKeyRef != NULL) {
         UnregisterEventHotKey(self.hotKeyRef);
     }
@@ -110,10 +105,10 @@ static NSString * const kFloatingButtonHiddenKey = @"FloatingButtonHidden";
         self.statusItem.button.title = @"取";
         self.statusItem.button.font = [NSFont systemFontOfSize:14.0 weight:NSFontWeightSemibold];
     }
-    self.statusItem.button.toolTip = @"ColorDropper 取色器 - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
+    self.statusItem.button.toolTip = @"ColorDropper 取色器 - 点击打开菜单，⌃⌥⌘C 唤起系统吸管";
 
     self.controlMenu = [[NSMenu alloc] init];
-    [self.controlMenu addItemWithTitle:@"取鼠标下颜色  ⌃⌥⌘C" action:@selector(copyColorUnderMouse) keyEquivalent:@""];
+    [self.controlMenu addItemWithTitle:@"打开系统吸管  ⌃⌥⌘C" action:@selector(copyColorUnderMouse) keyEquivalent:@""];
     self.toggleFloatingMenuItem = [self.controlMenu addItemWithTitle:@"隐藏悬浮按钮" action:@selector(toggleFloatingPanel) keyEquivalent:@""];
     [self.controlMenu addItemWithTitle:@"重置悬浮按钮位置" action:@selector(resetFloatingPanelPosition) keyEquivalent:@""];
     [self.controlMenu addItemWithTitle:@"在 Finder 中显示应用" action:@selector(revealAppInFinder) keyEquivalent:@""];
@@ -293,121 +288,52 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
 }
 
 - (void)copyColorUnderMouse {
-    [self copyColorAtPoint:NSEvent.mouseLocation];
+    [self startSystemColorSampler];
 }
 
 - (void)startClickPickMode {
-    if (self.clickMonitor != nil) {
+    [self startSystemColorSampler];
+}
+
+- (void)startSystemColorSampler {
+    if (self.colorSampler != nil) {
         return;
     }
 
-    [self setFloatingButtonTitle:@"点击目标"];
-    [self.floatingPanel orderOut:nil];
-    [self notifyWithTitle:@"进入取色模式" body:@"点击屏幕上的目标颜色，或直接用 ⌃⌥⌘C 取鼠标当前位置。"];
+    self.restoreFloatingPanelAfterSampling = self.floatingPanel.isVisible;
+    if (self.restoreFloatingPanelAfterSampling) {
+        [self.floatingPanel orderOut:nil];
+    }
+    [self setFloatingButtonTitle:@"取样中"];
+    self.statusItem.button.toolTip = @"ColorDropper - 点击目标像素取色，按 Esc 取消";
 
-    self.clickMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
-                                                               handler:^(NSEvent *event) {
-        NSPoint point = NSEvent.mouseLocation;
-        if (self.clickMonitor != nil) {
-            [NSEvent removeMonitor:self.clickMonitor];
-            self.clickMonitor = nil;
+    self.colorSampler = [[NSColorSampler alloc] init];
+    __weak typeof(self) weakSelf = self;
+    [self.colorSampler showSamplerWithSelectionHandler:^(NSColor *selectedColor) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (self == nil) {
+            return;
         }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self copyColorAtPoint:point];
+
+        self.colorSampler = nil;
+        if (self.restoreFloatingPanelAfterSampling) {
             [self.floatingPanel orderFrontRegardless];
-        });
+        }
+        self.restoreFloatingPanelAfterSampling = NO;
+
+        if (selectedColor == nil) {
+            self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 唤起系统吸管";
+            [self setFloatingButtonTitle:@"取色"];
+            return;
+        }
+
+        [self copyColor:selectedColor];
     }];
-}
-
-- (void)copyColorAtPoint:(NSPoint)mouse {
-    NSColor *compositeColor = [self compositeScreenColorAtPoint:mouse];
-    if (compositeColor != nil) {
-        [self copyColor:compositeColor];
-        return;
-    }
-
-    if (@available(macOS 15.2, *)) {
-        NSRect captureRect = [self topLeftScreenRectForMousePoint:mouse size:1];
-        self.statusItem.button.toolTip = @"ColorDropper - 正在读取颜色";
-        [self setFloatingButtonTitle:@"读取中"];
-
-        [SCScreenshotManager captureImageInRect:NSRectToCGRect(captureRect)
-                              completionHandler:^(CGImageRef _Nullable image, NSError * _Nullable error) {
-            if (image == NULL || error != nil) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
-                    [self setFloatingButtonTitle:@"取色"];
-                    [self.floatingPanel orderFrontRegardless];
-                    [self notifyWithTitle:@"取色失败"
-                                     body:@"请在 系统设置 > 隐私与安全性 > 屏幕录制 中允许 ColorDropper"];
-                });
-                return;
-            }
-
-            NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
-            NSInteger centerX = MAX(0, bitmap.pixelsWide / 2);
-            NSInteger centerY = MAX(0, bitmap.pixelsHigh / 2);
-            NSColor *color = [bitmap colorAtX:centerX y:centerY];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self.floatingPanel orderFrontRegardless];
-                [self copyColor:color];
-            });
-        }];
-    } else {
-        [self notifyWithTitle:@"系统版本太低" body:@"这个取色器需要 macOS 15.2 或更新版本"];
-    }
-}
-
-- (NSColor *)compositeScreenColorAtPoint:(NSPoint)mouse {
-    typedef CGImageRef (*CGWindowListCreateImageFunc)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
-    static CGWindowListCreateImageFunc createImage = NULL;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        createImage = (CGWindowListCreateImageFunc)dlsym(RTLD_DEFAULT, "CGWindowListCreateImage");
-    });
-
-    if (createImage == NULL) {
-        return nil;
-    }
-
-    CGRect captureRect = NSRectToCGRect([self topLeftScreenRectForMousePoint:mouse size:1]);
-    CGImageRef image = createImage(captureRect,
-                                   kCGWindowListOptionOnScreenOnly,
-                                   kCGNullWindowID,
-                                   kCGWindowImageBestResolution | kCGWindowImageShouldBeOpaque);
-    if (image == NULL) {
-        return nil;
-    }
-
-    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
-    CGImageRelease(image);
-
-    if (bitmap.pixelsWide < 1 || bitmap.pixelsHigh < 1) {
-        return nil;
-    }
-
-    NSInteger centerX = bitmap.pixelsWide / 2;
-    NSInteger centerY = bitmap.pixelsHigh / 2;
-    return [bitmap colorAtX:centerX y:centerY];
-}
-
-- (NSRect)topLeftScreenRectForMousePoint:(NSPoint)mouse size:(CGFloat)size {
-    CGFloat minX = CGFLOAT_MAX;
-    CGFloat maxY = -CGFLOAT_MAX;
-
-    for (NSScreen *screen in NSScreen.screens) {
-        minX = MIN(minX, NSMinX(screen.frame));
-        maxY = MAX(maxY, NSMaxY(screen.frame));
-    }
-
-    CGFloat originX = floor(mouse.x - minX - (size / 2.0));
-    CGFloat originY = floor(maxY - mouse.y - (size / 2.0));
-    return NSMakeRect(originX, originY, size, size);
 }
 
 - (void)copyColor:(NSColor *)color {
     if (color == nil) {
-        self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
+        self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 唤起系统吸管";
         [self setFloatingButtonTitle:@"取色"];
         [self notifyWithTitle:@"取色失败"
                          body:@"请在 系统设置 > 隐私与安全性 > 屏幕录制 中允许 ColorDropper"];
@@ -427,7 +353,7 @@ static OSStatus HotKeyHandler(EventHandlerCallRef nextHandler, EventRef event, v
     self.statusItem.button.toolTip = [NSString stringWithFormat:@"ColorDropper - 已复制 %@", hex];
     [self setFloatingButtonTitle:@"已复制"];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 复制鼠标下颜色";
+        self.statusItem.button.toolTip = @"ColorDropper - 点击打开菜单，⌃⌥⌘C 唤起系统吸管";
         [self setFloatingButtonTitle:@"取色"];
     });
     [self notifyWithTitle:@"已复制颜色" body:hex];
